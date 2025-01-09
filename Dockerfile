@@ -1,25 +1,15 @@
-ARG MAX_JOBS=8
+FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
 
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
-
-RUN apt-get update \
-  && apt-get install -y wget git build-essential ninja-build git-lfs libaio-dev \
-  && apt-get install -y --allow-change-held-packages vim curl nano libnccl2 libnccl-dev rsync s3fs \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  wget git git-lfs curl nano build-essential \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-ENV PATH="/root/miniconda3/bin:${PATH}"
+RUN pip install --no-cache-dir \
+  "unsloth[cu124-torch251] @ git+https://github.com/unslothai/unsloth.git" \
+  wandb --root-user-action=ignore
+# RUN pip install --no-cache-dir cut_cross_entropy==24.12.3 safetensors==0.4.5 xformers==0.0.28.post3 --root-user-action=ignore
+# RUN pip install --no-cache-dir --root-user-action=ignore
 
-RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh \
-  && mkdir /root/.conda \
-  && bash Miniconda3-latest-Linux-x86_64.sh -b \
-  && rm -f Miniconda3-latest-Linux-x86_64.sh \
-  && conda create -n unsloth python="3.11" pytorch-cuda="12.4" \
-  pytorch cudatoolkit -c pytorch -c nvidia -y \
-  && conda clean -afy
+ENV VERSION=2025.1.2
 
-ENV PATH="/root/miniconda3/envs/unsloth/bin:${PATH}"
-
-WORKDIR /workspace
-
-RUN pip install "unsloth[cu124-ampere-torch251] @ git+https://github.com/unslothai/unsloth.git" wandb --root-user-action=ignore\
-  && pip install --no-deps trl peft accelerate bitsandbytes --root-user-action=ignore
+RUN pip install --no-cache-dir "unsloth[cu124-torch251] @ git+https://github.com/unslothai/unsloth.git" --root-user-action=ignore

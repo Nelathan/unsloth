@@ -1,12 +1,12 @@
 services:
   unsloth:
-    image: unsloth-cuda
+    image: unsloth
     build: .
     environment:
       - WANDB_API_KEY=${WANDB_API_KEY}
       - HF_TOKEN=${HF_TOKEN}
-      - HF_HUB_ENABLE_HF_TRANSFER="1"
-      - HF_HOME="/workspace/hf-cache"
+      - HF_HUB_ENABLE_HF_TRANSFER=1
+      - HF_HOME=/workspace/hf-cache
     volumes:
       - hub:/workspace/hf-cache
       - outputs:/workspace/outputs
@@ -18,8 +18,9 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    command: ["bash", "-c", "python recipes/Falcon3-3B-qlora-1k.py"]
+    command: ["bash", "-c", "python recipes/Falcon3-3B-RP.py"]
     tty: true
+    stdin_open: true
 
 volumes:
   hub:

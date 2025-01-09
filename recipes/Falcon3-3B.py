@@ -6,7 +6,7 @@ from transformers import logging
 logging.set_verbosity_warning()
 
 product = "Falcon3-3B-qlora-1k"
-max_seq_length = 1024*4
+max_seq_length = 1024*8
 dtype = torch.bfloat16
 load_in_4bit = True # Use 4bit quantization to reduce memory usage. Can be False.
 os.environ["WANDB_WATCH"] = "false"  # Disable gradient logging
@@ -54,7 +54,7 @@ from datasets import load_dataset
 # dataset = load_dataset("json", data_files = {"train" : url}, split = "train")
 
 #dataset = load_dataset("mlabonne/FineTome-100k", split = "train")
-dataset = load_dataset("mlabonne/FineTome-100k", split = "train[:100000]")
+dataset = load_dataset("mlabonne/FineTome-100k", split = "train[:1000]")
 dataset = standardize_sharegpt(dataset)
 dataset = dataset.map(formatting_prompts_func, batched = True)
 split = dataset.train_test_split(test_size = 0.04)
@@ -67,15 +67,15 @@ print(f"EOS token: {tokenizer.eos_token} ({tokenizer.eos_token_id})")
 from unsloth import UnslothTrainer, UnslothTrainingArguments
 args = UnslothTrainingArguments(
     bf16 = True,
-    per_device_train_batch_size = 8,
-    per_device_eval_batch_size = 1,
-    gradient_accumulation_steps = 1,
+    per_device_train_batch_size = 4,
+    per_device_eval_batch_size = 4,
+    gradient_accumulation_steps = 2,
     packing=True,
     # eval_packing = False,
     num_of_sequences = max_seq_length,
     max_seq_length = max_seq_length,
     warmup_steps = 20,
-    max_steps = 200,
+    # max_steps = 200,
     num_train_epochs = 1,
     lr_scheduler_type = "constant",
     learning_rate = 5e-5,
