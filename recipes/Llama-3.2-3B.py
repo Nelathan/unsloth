@@ -5,11 +5,11 @@ import wandb
 from transformers import logging, PreTrainedTokenizerFast
 logging.set_verbosity_warning()
 
-model_input = "tiiuae/Falcon3-1B-Base"
-product = "Falcon3-1B-Duck"
+model_input = "unsloth/Llama-3.2-3B-bnb-4bit"
+product = "Llama-3.2-3B-Duck"
 max_seq_length = 1024*4
 dtype = torch.bfloat16
-load_in_4bit = False # Use 4bit quantization to reduce memory usage. Can be False.
+load_in_4bit = True # Use 4bit quantization to reduce memory usage. Can be False.
 os.environ["WANDB_WATCH"] = "false"  # Disable gradient logging
 
 from unsloth import FastLanguageModel
@@ -19,38 +19,21 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     dtype = dtype,
     load_in_4bit = load_in_4bit
 )
-print("Model loaded successfully.")
+print(">>> Model loaded")
 
-# Do model patching and add fast LoRA weights
-model = FastLanguageModel.get_peft_model(
-    model,
-    r = 128,
-    lora_alpha = 128,
-    target_modules = [
-        "q_proj", "k_proj", "v_proj",
-        "o_proj", "gate_proj", "up_proj", "down_proj",
-        "lm_head", "embed_tokens",
-    ],
-    use_gradient_checkpointing="unsloth",
-)
-print("Model patched successfully.")
+assert isinstance(tokenizer, PreTrainedTokenizerFast), f"Invalid tokenizer type: {type(tokenizer)}"
 
-print("tokenizer", tokenizer)
-
-freechatml_template = \
-    "{% for message in messages %}"\
-        "{{ '<|startoftext|>' + message['role'] + '\n' + message['content'] + '<|endoftext|>\n' }}"\
-    "{% endfor %}"\
-    "{% if add_generation_prompt %}"\
-        "{{ '<|startoftext|>' }}"\
-    "{% endif %}"
-pass
+# print("tokenizer", tokenizer)
+# print("Added tokens:", tokenizer.get_added_vocab())
+# print("Special tokens:", tokenizer.special_tokens_map)
 
 from unsloth.chat_templates import get_chat_template, standardize_sharegpt
 tokenizer = get_chat_template(
     tokenizer,
-    chat_template = (freechatml_template, '<|endoftext|>'),
+    chat_template = 'llama-3'
 )
+
+model.resize_token_embeddings(len(tokenizer))
 
 def formatting_prompts_func(examples):
     convos = examples["conversations"]
@@ -65,59 +48,24 @@ system_sugarquill = "You are an author writing popular shortstories."
 sugarquill = sugarquill.map(lambda row:
     { "conversations": [
         { "role": "system", "content": system_sugarquill },
-        { "role": "author", "content": row["text"] }]
+        { "role": "assistant", "content": row["text"] }]
     }
 )
 
-# finetome = load_dataset("mlabonne/FineTome-100k", split = "train")
-# finetome = standardize_sharegpt(finetome)
-
-# finetome = finetome.map(lambda row:
-#     { "length": sum([len(message["content"]) for message in row["conversations"]]) }
-# )
-
 airoboros = load_dataset("jondurbin/airoboros-3.2", split = "train")
 airoboros = standardize_sharegpt(airoboros)
+print(set([row["category"] for row in airoboros]))
 airoboros = airoboros.filter(lambda row: row["category"] not in ["coding", "math"])
 
-# airoboros = airoboros.map(lambda row:
-#     { "length": sum([len(message["content"]) for message in row["conversations"]]) }
-# )
-
-# import numpy as np
-# lengths = np.array([row["length"] for row in finetome])
-# bins = np.linspace(0, 8000, 40)
-# histogram, bin_edges = np.histogram(lengths, bins=bins)
-# print("Histogram of conversation lengths:")
-# for i in range(len(histogram)):
-#     # respecting the total size, scaling the histogram to 100 characters
-#     print(f"{int(bin_edges[i]):4d}-{int(bin_edges[i+1]):4d}: {'#' * int(histogram[i] / max(histogram) * 100)}")
-# pass
-
-# thus dropping all long conversations
-# finetome = finetome.sort('length').select(range(20000))
-# airoboros = airoboros.sort('length')\
-    # .select(range(50000))
-
-# celeste = load_dataset("allura-org/Celeste-1.x-data-mixture", split = "train[:400]")
-
-ds_pre = sugarquill.map(
-    formatting_prompts_func,
-    remove_columns=sugarquill.column_names,
-    batched = True,
-    desc="Formatting Pre"
-)
-ds_sft = airoboros.map(
+ds_train = concatenate_datasets([
+    airoboros,
+    sugarquill
+]).map(
     formatting_prompts_func,
     remove_columns=airoboros.column_names,
     batched = True,
-    desc="Formatting SFT"
+    desc="Formatting Training"
 )
-
-ds_train = concatenate_datasets([
-    ds_pre.shuffle(seed=42),
-    ds_sft.shuffle(seed=42)
-])
 
 ds_split = ds_train.train_test_split(test_size=200, seed=42)
 ds_train = ds_split["train"]
@@ -134,8 +82,11 @@ pass
 
 learning_rate = 5e-5
 from unsloth import UnslothTrainer, UnslothTrainingArguments
+from datetime import datetime
+timetamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 args = UnslothTrainingArguments(
-    output_dir = "outputs",
+    output_dir = "outputs/" + product + f"_{timetamp}",
+    run_name = f"{timetamp}",
     report_to = "wandb",
     bf16 = True,
     per_device_train_batch_size = 4,
@@ -161,6 +112,20 @@ args = UnslothTrainingArguments(
     do_eval = True,
     eval_steps = 25,
 )
+
+# Do model patching and add fast LoRA weights
+model = FastLanguageModel.get_peft_model(
+    model,
+    r = 128,
+    lora_alpha = 128,
+    target_modules = [
+        "q_proj", "k_proj", "v_proj",
+        "o_proj", "gate_proj", "up_proj", "down_proj",
+        "lm_head", "embed_tokens",
+    ],
+    use_gradient_checkpointing="unsloth",
+)
+print(">>> LoRA weights added")
 
 trainer = UnslothTrainer(
     model = model,

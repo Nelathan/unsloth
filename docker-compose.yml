@@ -9,7 +9,7 @@ services:
       - HF_HOME=/workspace/hf-cache
     volumes:
       - hub:/workspace/hf-cache
-      - outputs:/workspace/outputs
+      - "D:/ai/unsloth:/workspace/outputs"
       - ./recipes:/workspace/recipes
     deploy:
       resources:
@@ -18,7 +18,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    command: ["bash", "-c", "python recipes/Falcon3-3B-RP.py"]
+    command: ["bash"]
     tty: true
     stdin_open: true
 

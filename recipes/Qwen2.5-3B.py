@@ -5,11 +5,11 @@ import wandb
 from transformers import logging, PreTrainedTokenizerFast
 logging.set_verbosity_warning()
 
-model_input = "tiiuae/Falcon3-1B-Base"
-product = "Falcon3-1B-Duck"
+model_input = "unsloth/Qwen2.5-3B-bnb-4bit"
+product = "Qwen2.5-3B-Duck"
 max_seq_length = 1024*4
 dtype = torch.bfloat16
-load_in_4bit = False # Use 4bit quantization to reduce memory usage. Can be False.
+load_in_4bit = True # Use 4bit quantization to reduce memory usage. Can be False.
 os.environ["WANDB_WATCH"] = "false"  # Disable gradient logging
 
 from unsloth import FastLanguageModel
@@ -35,22 +35,25 @@ model = FastLanguageModel.get_peft_model(
 )
 print("Model patched successfully.")
 
-print("tokenizer", tokenizer)
+
 
 freechatml_template = \
     "{% for message in messages %}"\
-        "{{ '<|startoftext|>' + message['role'] + '\n' + message['content'] + '<|endoftext|>\n' }}"\
+        "{{ '<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>\n' }}"\
     "{% endfor %}"\
     "{% if add_generation_prompt %}"\
-        "{{ '<|startoftext|>' }}"\
+        "{{ '<|im_start|>' }}"\
     "{% endif %}"
 pass
 
 from unsloth.chat_templates import get_chat_template, standardize_sharegpt
 tokenizer = get_chat_template(
     tokenizer,
-    chat_template = (freechatml_template, '<|endoftext|>'),
+    chat_template = 'chatml',
+    map_eos_token=True
 )
+
+print("tokenizer", tokenizer)
 
 def formatting_prompts_func(examples):
     convos = examples["conversations"]
@@ -65,7 +68,7 @@ system_sugarquill = "You are an author writing popular shortstories."
 sugarquill = sugarquill.map(lambda row:
     { "conversations": [
         { "role": "system", "content": system_sugarquill },
-        { "role": "author", "content": row["text"] }]
+        { "role": "assistant", "content": row["text"] }]
     }
 )
 

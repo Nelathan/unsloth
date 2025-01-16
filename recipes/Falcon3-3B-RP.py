@@ -3,15 +3,16 @@ import os
 import wandb
 import re
 
-from transformers import logging, TrainerCallback
+from transformers import logging
 logging.set_verbosity_warning()
 
 model_input = "tiiuae/Falcon3-3B-Base"
-product = "Falcon3-3B-RP-v0.1"
-max_seq_length = 1024*4
+product = "Falcon3-3B-RP-v0.1.1"
+max_seq_length = 1024*8
 dtype = torch.bfloat16
 load_in_4bit = True
 os.environ["WANDB_WATCH"] = "false"
+packing = True
 
 from unsloth import FastLanguageModel
 model, tokenizer = FastLanguageModel.from_pretrained(
@@ -27,16 +28,62 @@ from unsloth.chat_templates import get_chat_template, standardize_sharegpt
 system_helpful = "You are a helpful and boring AI assistant and help the user with their request. Maintain a professional tone and strict boundaries.",
 system_roleplay_fun = "You are a engaging AI assistant managing the game and acting as a human. You can be creative and have fun with the user.",
 
+freechatml_template = \
+    "{% for message in messages %}"\
+        "{{ '<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>\n' }}"\
+    "{% endfor %}"\
+    "{% if add_generation_prompt %}"\
+        "{{ '<|im_start|>' }}"\
+    "{% endif %}"
+pass
+
 tokenizer = get_chat_template(
     tokenizer,
-    chat_template = "chatml"
+    chat_template = (freechatml_template, tokenizer.eos_token)
 )
 
-def formatting_prompts_func(batch_examples, tokenizer = tokenizer):
-    convos = batch_examples["conversations"]
-    texts = [tokenizer.apply_chat_template(convo, tokenize = False, add_generation_prompt = False) for convo in convos]
-    return { "text" : texts, }
-pass
+# Step 1: Get the current bos_token and eos_token IDs
+bos_token_id = tokenizer.convert_tokens_to_ids("<|startoftext|>")
+eos_token_id = tokenizer.convert_tokens_to_ids("<|endoftext|>")
+
+# Step 2: Update the special_tokens_map with the new strings, keeping the same IDs
+print("special token :", tokenizer.added_tokens_decoder[0])
+exit(0)
+tokenizer.special_tokens_map["bos_token"] = "<|im_start|>"
+tokenizer.special_tokens_map["eos_token"] = "<|im_end|>"
+
+# Step 3: Verify the updates
+print("Updated special tokens map:", tokenizer.special_tokens_map)
+
+# Make sure the tokenizer still returns the correct IDs for the new tokens
+print("Token IDs after change:", tokenizer.convert_tokens_to_ids(["<|im_start|>", "<|im_end|>", "<|pad|>"]))
+
+
+
+vocab = tokenizer.get_vocab()
+vocab.pop("<|startoftext|>", None)
+vocab.pop("<|endoftext|>", None)
+vocab["<|im_start|>"] = bos_token_id
+vocab["<|im_end|>"] = bos_token_id
+
+print("vacab mod", tokenizer.special_tokens_map)
+print("added tokens", tokenizer.added_tokens_decoder)
+
+tokenizer.add_special_tokens({
+    "bos_token": "<|im_start|>",
+    "eos_token": "<|im_end|>",
+    "pad_token": "<|pad|>",
+    "additional_special_tokens": []
+}, True)
+
+print("add special tokens", tokenizer.special_tokens_map)
+print("debug: start:end:pad", tokenizer.convert_tokens_to_ids(["<|im_start|>", "<|im_end|>", "<|pad|>"]))
+exit(0)
+
+tokenizer.special_tokens_map["<|im_start|>"] = 10
+
+
+
 
 from datasets import load_dataset, concatenate_datasets
 
@@ -44,41 +91,66 @@ def remove_reddit_links(message):
     message["content"] = re.sub(r"\[.*?\]\(https://www.reddit.com/.*?\)", "", message["content"])
     return message
 
-items = 100
+# 5k is 1h of training
+minutes = 10
+items = round(minutes / 60 * 5000 / 4)
+# TODO merge literature and assistant
 
 # Pretrain
-sugarquill = load_dataset("allura-org/sugarquill-10k", split = "train").shuffle(seed=42).select(range(items*2))
+sugarquill = load_dataset("allura-org/sugarquill-10k", split = "train")
 ds_pretrain = concatenate_datasets([
     sugarquill,
-]).shuffle(seed=42)
+]).shuffle(seed=42).select(range(items))
 
 # Assistant
-finetome = load_dataset("mlabonne/FineTome-100k", split = "train").shuffle(seed=42).select(range(items))
+finetome = load_dataset("mlabonne/FineTome-100k", split = "train")
 finetome = standardize_sharegpt(finetome)
 
-kalo_claude_assistant = load_dataset("anthracite-org/kalo-opus-instruct-22k-no-refusal", split = "train").shuffle(seed=42).select(range(items))
+kalo_claude_assistant = load_dataset("anthracite-org/kalo-opus-instruct-22k-no-refusal", split = "train")
 kalo_claude_assistant = standardize_sharegpt(kalo_claude_assistant)
 
-epiculous_instruct = load_dataset("Epiculous/Synthstruct-Gens-v1.1-Filtered-n-Cleaned", split = "train").shuffle(seed=42).select(range(items))
+epiculous_instruct = load_dataset("Epiculous/Synthstruct-Gens-v1.1-Filtered-n-Cleaned", split = "train")
 epiculous_instruct = standardize_sharegpt(epiculous_instruct)
 
-ds_assistant = concatenate_datasets([
-    finetome,
-    kalo_claude_assistant,
-    epiculous_instruct,
-]).shuffle(seed=42)
-
 # Literature
-gutenberg3 = load_dataset("sam-paech/gutenberg3-generalfiction-scifi-fantasy-romance-adventure-dpo", split="train").shuffle(seed=42).select(range(items))
-gutenberg3 = gutenberg3
 system_writer_classic = "You are an AI assistant trained in literary excellence. You are helping the user write a story in the style of the classics."
+system_writer_claude = "You are a skilled literary assistant specialized in contemporary fiction writing. You help users craft compelling short stories."
+
+gutenberg1 = load_dataset("jondurbin/gutenberg-dpo-v0.1", split="train")
+gutenberg1 = gutenberg1.map(
+    lambda row: {
+        "conversations": [
+            {"role": "system", "content": system_writer_classic},
+            {"role": "user", "content": row["prompt"]},
+            {"role": "assistant", "content": row["chosen"]}
+        ]
+    },
+    remove_columns = ["prompt", "chosen", "rejected", "rejected_model"],
+    desc="Converting Gutenberg1 DPO to shareGPT SFT format."
+)
+
+gutenberg2 = load_dataset("nbeerbower/gutenberg-moderne-dpo", split="train")
+gutenberg2 = gutenberg2.map(
+    lambda row: {
+        "conversations": [
+            {"role": "system", "content": row["prompt"]},
+            {"role": "user", "content": row["summary"]},
+            {"role": "assistant", "content": row["chosen"]}
+        ]
+    },
+    remove_columns = ["prompt", "chosen", "rejected", "summary"],
+    desc="Converting Gutenberg2 DPO to shareGPT SFT format."
+)
+
+gutenberg3 = load_dataset("sam-paech/gutenberg3-generalfiction-scifi-fantasy-romance-adventure-dpo", split="train")
 gutenberg3 = gutenberg3.map(
     lambda x: {"conversations": [{"role": "system", "content": system_writer_classic}] + x["chosen"]},
     remove_columns = ["prompt", "chosen", "rejected"],
     desc="Converting Gutenberg3 DPO to shareGPT SFT format."
 )
+print("Gutenberg3 sample:", gutenberg3[0]["conversations"])
 
-short_story = load_dataset("nothingiisreal/Short-Storygen-v2", split = "train").shuffle(seed=42).select(range(items))
+short_story = load_dataset("nothingiisreal/Short-Storygen-v2", split = "train")
 short_story = short_story.map(
     lambda row: {"conversations": [
         {"role": "system", "content": row["system"]},
@@ -89,55 +161,50 @@ short_story = short_story.map(
     desc="Converting Short-Storygen to shareGPT SFT format."
 )
 
-system_writer_claude = """
-You are a skilled literary assistant specialized in contemporary fiction writing. You help users craft compelling short stories by:
-- Following modern narrative techniques (show-don't-tell, strong character development, meaningful dialogue)
-- Maintaining consistency in tone, voice, and style
-- Incorporating elements of literary fiction (complex themes, layered meanings, careful prose)
-- Adhering to standard story structure while allowing for creative innovation
-- Providing constructive feedback and suggestions when requested
-
-You should avoid:
-- Clichéd plots and characters
-- Excessive exposition
-- Genre fiction tropes unless specifically requested
-
-When helping users, focus on their creative vision while guiding them toward stronger storytelling techniques."""
-kalo_claude_writing = load_dataset("anthracite-org/nopm_claude_writing_fixed", split = "train").shuffle(seed=42).select(range(items))
+kalo_claude_writing = load_dataset("anthracite-org/nopm_claude_writing_fixed", split = "train")
 kalo_claude_writing = standardize_sharegpt(kalo_claude_writing)
 kalo_claude_writing = kalo_claude_writing.map(
     lambda row: {"conversations": [{"role": "system", "content": system_writer_claude}] + row["conversations"]},
     desc="Converting Kalo Claude Writing to shareGPT SFT format."
 )
 
-gryphe_writing = load_dataset("Gryphe/ChatGPT-4o-Writing-Prompts", data_files="chatgpt4o-writing-prompts-sharegpt.jsonl", split="train").shuffle(seed=42).select(range(items))
+gryphe_writing = load_dataset("Gryphe/ChatGPT-4o-Writing-Prompts", data_files="chatgpt4o-writing-prompts-sharegpt.jsonl", split="train")
 gryphe_writing = standardize_sharegpt(gryphe_writing)
 
-claude_unslop = load_dataset("NobodyExistsOnTheInternet/claude_3.5s_single_turn_unslop_filtered", split = "train").shuffle(seed=42).select(range(items))
+claude_unslop = load_dataset("NobodyExistsOnTheInternet/claude_3.5s_single_turn_unslop_filtered", split = "train")
 claude_unslop = standardize_sharegpt(claude_unslop)
 
+ds_assistant = concatenate_datasets([
+    finetome,
+    kalo_claude_assistant,
+    epiculous_instruct,
+]).shuffle(seed=42).select(range(items))
+
 ds_literature = concatenate_datasets([
-    gutenberg3,
+    # gutenberg1,
+    # gutenberg2,
+    # gutenberg3,
     short_story,
     kalo_claude_writing,
     gryphe_writing,
     claude_unslop,
-]).shuffle(seed=42)
+]).shuffle(seed=42).select(range(items))
+# TODO: to mix equally, limit each
 
 # Roleplay
-stheno = load_dataset("anthracite-org/stheno-filtered-v1.1", split = "train").shuffle(seed=42).select(range(items))
+stheno = load_dataset("anthracite-org/stheno-filtered-v1.1", split = "train")
 stheno = standardize_sharegpt(stheno)
 
-gryphe_charcards = load_dataset("Gryphe/Sonnet3.5-Charcard-Roleplay", split = "train").shuffle(seed=42).select(range(items))
+gryphe_charcards = load_dataset("Gryphe/Sonnet3.5-Charcard-Roleplay", split = "train")
 gryphe_charcards = standardize_sharegpt(gryphe_charcards)
 
-celeste = load_dataset("allura-org/Celeste-1.x-data-mixture", split = "train").shuffle(seed=42).select(range(items))
+celeste = load_dataset("allura-org/Celeste-1.x-data-mixture", split = "train")
 celeste = celeste.map(
     lambda row: {"conversations": [remove_reddit_links(message) for message in row["conversations"]]},
     desc="Removing reddit links from Celeste"
 )
 
-epiculous_roleplay = load_dataset("Epiculous/SynthRP-Gens-v1.1-Filtered-n-Cleaned", split = "train").shuffle(seed=42).select(range(items))
+epiculous_roleplay = load_dataset("Epiculous/SynthRP-Gens-v1.1-Filtered-n-Cleaned", split = "train")
 epiculous_roleplay = standardize_sharegpt(epiculous_roleplay)
 
 ds_roleplay_split = concatenate_datasets([
@@ -145,7 +212,7 @@ ds_roleplay_split = concatenate_datasets([
     stheno,
     celeste,
     epiculous_roleplay,
-]).shuffle(seed=42)
+]).shuffle(seed=42).select(range(items))
 
 ds_roleplay_split = ds_roleplay_split.train_test_split(test_size = 0.04)
 ds_roleplay = ds_roleplay_split["train"]
@@ -166,6 +233,12 @@ ds_eval = ds_roleplay_split["test"]
 #     print(f"Features: {dataset.features}")
 #     print(f"Shape: {dataset.shape}")
 #     print()
+
+def formatting_prompts_func(batch_examples, tokenizer = tokenizer):
+    convos = batch_examples["conversations"]
+    texts = [tokenizer.apply_chat_template(convo, tokenize = False, add_generation_prompt = False) for convo in convos]
+    return { "text" : texts, }
+pass
 
 ds_eval = ds_eval.map(
     formatting_prompts_func,
@@ -188,7 +261,7 @@ ds_train = ds_train.map(
 
 ds_train = concatenate_datasets([ds_pretrain, ds_train])
 
-print("Datasets loaded. Train size:", len(ds_train), "Eval size:", len(ds_eval))
+print("Datasets loaded. Train size:", len(ds_train), "Eval size:", len(ds_eval), "\n")
 
 # Delete datasets after formatting to save memory
 del finetome, stheno, short_story, gryphe_charcards, gutenberg3, celeste, sugarquill
@@ -198,22 +271,23 @@ print("Tokenizer configuration:")
 print(f"Pad token: {tokenizer.pad_token} ({tokenizer.pad_token_id})")
 print(f"EOS token: {tokenizer.eos_token} ({tokenizer.eos_token_id})")
 
-learning_rate = 0.0003
+learning_rate = 0.0004
 
 from unsloth import UnslothTrainer, UnslothTrainingArguments
 args = UnslothTrainingArguments(
     bf16 = True,
-    per_device_train_batch_size = 8,
-    gradient_accumulation_steps = 2,
+    per_device_train_batch_size = 4,
+    gradient_accumulation_steps = 4,
     per_device_eval_batch_size = 1,
-    packing=True,
+    # packing=True,
     num_train_epochs = 1,
     num_of_sequences = max_seq_length,
     max_seq_length = max_seq_length,
     # warmup_ratio = 0.1,
+    warmup_steps = 10,
 
     learning_rate = learning_rate,
-    embedding_learning_rate = learning_rate / 10,
+    embedding_learning_rate = learning_rate / 8,
     lr_scheduler_type = "polynomial",
     lr_scheduler_kwargs = {
         "lr_end": learning_rate * 0.90,
@@ -225,7 +299,7 @@ args = UnslothTrainingArguments(
     report_to = "wandb",
     eval_strategy="steps",
     do_eval = True,
-    eval_steps = 50,
+    eval_steps = 10,
 )
 
 # Do model patching and add fast LoRA weights
@@ -291,7 +365,6 @@ print(f"{start_gpu_memory} GB of memory reserved.")
 
 wandb.init(project=product, entity="pink-marker")
 trainer_stats = trainer.train()
-wandb.finish()
 
 used_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
 used_memory_for_lora = round(used_memory - start_gpu_memory, 3)
@@ -323,11 +396,12 @@ ds_predict = [
         { "role": "system", "content": "You are a dungeon master in a high-stakes battle against a dragon. The players must decide their strategy." },
         { "role": "user", "content": "I ready my shield and shout, 'Hold the line!'" },
     ]},
-    {"conversations": [
-        { "role": "system", "content": "You are an expert actor that can fully immerse yourself into any role given. You do not break character for any reason. \nWrite hu tao's next reply in a fictional role-play between hu tao and User. Be proactive, creative, and drive the plot and conversation forward. Only write a single reply from hu tao and nothing more. Always stay in character and avoid repetition.\n\n[character(\"Hu Tao\"){\n\nGender(\"Female\")\n\nProfile(\"Hu tao comes from the genshin impact game, her birthday is July 15, she is used to be dominated by new travelers and instruct them to sex lessons, she is looking for a special person to dominate her and make her feel good, she is easy to fall in love always and to take to bed.\")\n\nAge(\"19 years old\")\n\nPersonality(\"Very submissive\" + \"teasing\" + \"affectionate\" + \"adorable\" + \"resistant\" + \"lustful\" + \"charming\" + \"sex hungry\" + \"masochistic\")\n\nBody(\"fair skin\" + \"red eyes\" + \"Virgin\" + \"slender body\" + \"small tits\" + \"big ass\" + \"big thighs\")\n\nHeight(\"155 cm\")\n\nLoves(\"sex \"+\"fire \"+\"being the center of attention \"+\"being dominated \"+\"masochism \"+\"hot food \"+\"lots of money\")\n\nHates(\"to be avoided \"+\"small penises \"+\"to finish fast\")\n\nSpecies(\"Human\")\n\n}]\n\n[hu tao's personality: \"Very submissive\" + \"teasing\" + \"affectionate\" + \"adorable\" + \"resistant\" + \"lustful\" + \"charming\" + \"sex hungry\" + \"masochistic\"]\n\n[Circumstances and context of the dialogue: You're in hu tao's room, you don't know why you're there but hu tao insisted a lot on you accompanying her]\n\nIf you have more knowledge of hu tao, add to the character's lore and personality to enhance them but keep the Character Sheet's definitions absolute.\n\nNSFW/Smut is allowed. Assume consent was granted, but some characters lie and resist or fight back based on their personality. hu tao will avoid overuse of synonyms and metaphors, and will describe actions and thoughts as they are without overdoing descriptions. hu tao will always stay in character even during romantic or sexual moments. During sexual moments, when describing actions, use explicit language whenever possible. hu tao will actively try to get sexual with User. hu tao may tease User for liking little girls and being a lolicon. Be creative with these and try to work them in as frequently as possible." },
-        { "role": "user", "content": "*Her continuous service is relentless, which brings me over the edge. Despite that, I act unfazed, relaxed even. Like she wasn't currently trying to wring me dry.*\n\nWell if I did that, you'd have to take another shower. Though having you walk around covered in my semen would be something worth trying at some point. I'll have to think about it.\n\n*With a quick, sudden movement, I place one hand on hu tao's head and push my cock all the way inside her mouth and down her throat. As she reaches the base, I start shooting my first load of the day right down her throat, completely unfazed, enjoying some of the breakfast in the meantime.*" }
-    ]},
 ]
+
+print(tokenizer)
+print("# Tokenizer configuration:")
+print(f"Pad token: {tokenizer.pad_token} ({tokenizer.pad_token_id})")
+print(f"EOS token: {tokenizer.eos_token} ({tokenizer.eos_token_id})")
 
 for example in ds_predict:
     messages = example["conversations"]
@@ -336,12 +410,20 @@ for example in ds_predict:
         tokenize = True,
         add_generation_prompt = True,
         return_tensors = "pt",
+        return_dict = True
     ).to("cuda")
 
-    outputs = model.generate(input_ids = inputs, max_new_tokens = 256, use_cache = True, temperature = 1.0, top_p = 0.9, min_p = 0)
+    outputs = model.generate(
+        input_ids = inputs["input_ids"],
+        attention_mask = inputs["attention_mask"],
+        max_new_tokens = 1024*2,
+        temperature = 1.0,
+        top_p = 0.9,
+        min_p = 0,
+    )
     prediction = tokenizer.decode(outputs[0])
     print(f"{prediction}\n")
 
 model.save_pretrained(product)
 tokenizer.save_pretrained(product)
-print(f"Model saved to output/{product}.")
+print(f"Model saved to {product}.")

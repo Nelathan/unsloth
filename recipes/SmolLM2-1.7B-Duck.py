@@ -5,11 +5,11 @@ import wandb
 from transformers import logging, PreTrainedTokenizerFast
 logging.set_verbosity_warning()
 
-model_input = "tiiuae/Falcon3-1B-Base"
-product = "Falcon3-1B-Duck"
+model_input = "unsloth/SmolLM2-1.7B"
+product = "SmolLM2-1.7B-Duck"
 max_seq_length = 1024*4
 dtype = torch.bfloat16
-load_in_4bit = False # Use 4bit quantization to reduce memory usage. Can be False.
+load_in_4bit = True # Use 4bit quantization to reduce memory usage. Can be False.
 os.environ["WANDB_WATCH"] = "false"  # Disable gradient logging
 
 from unsloth import FastLanguageModel
@@ -39,10 +39,10 @@ print("tokenizer", tokenizer)
 
 freechatml_template = \
     "{% for message in messages %}"\
-        "{{ '<|startoftext|>' + message['role'] + '\n' + message['content'] + '<|endoftext|>\n' }}"\
+        "{{ '<|im_start|>' + message['role'] + '\n' + message['content'] + '<|endoftext|>\n' }}"\
     "{% endfor %}"\
     "{% if add_generation_prompt %}"\
-        "{{ '<|startoftext|>' }}"\
+        "{{ '<|im_start|>' }}"\
     "{% endif %}"
 pass
 
