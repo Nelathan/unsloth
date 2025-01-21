@@ -81,6 +81,7 @@ for i, row in enumerate(ds_train):
 pass
 
 learning_rate = 5e-5
+
 from unsloth import UnslothTrainer, UnslothTrainingArguments
 from datetime import datetime
 timetamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -89,6 +90,7 @@ args = UnslothTrainingArguments(
     run_name = f"{timetamp}",
     report_to = "wandb",
     bf16 = True,
+
     per_device_train_batch_size = 4,
     gradient_accumulation_steps = 4,
     per_device_eval_batch_size = 2,
@@ -143,8 +145,9 @@ print(f"GPU = {gpu_stats.name}. Max memory = {max_memory} GB.")
 print(f"{start_gpu_memory} GB of memory reserved.")
 
 wandb.init(project=product, entity="pink-marker", save_code=True)
-trainer_stats = trainer.train()
-wandb.finish()
+from unsloth import unsloth_train
+# trainer_stats = trainer.train() << Buggy gradient accumulation
+trainer_stats = unsloth_train(trainer)
 
 #@title Show final memory and time stats
 used_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)

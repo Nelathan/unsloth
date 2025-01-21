@@ -96,34 +96,6 @@ trainer = UnslothTrainer(
 )
 print("Trainer created successfully.")
 
-# Train on responses only
-# trainer = train_on_responses_only(
-#     trainer,
-#     instruction_part = "<|im_start|>user\n",
-#     response_part = "<|im_start|>assistant\n",
-# )
-
-# print("Masked response tokens:")
-# red = "\033[31m"
-# green = "\033[32m"
-# blue = "\033[34m"
-# reset = "\033[0m"
-# colored_tokens = []
-# print("tokens", len(trainer.train_dataset[1]["labels"]))
-# print("tokens size", len(trainer.train_dataset[1]["labels"]))
-# special_ids = tokenizer.added_tokens_decoder.keys()
-
-# for token_id in trainer.train_dataset[1]["labels"]:
-#     if token_id == -100:
-#         colored_tokens.append(f"{red}(-){reset}")
-#     elif token_id in special_ids:
-#         token_str = tokenizer.decode([token_id])
-#         colored_tokens.append(f"{blue}{token_str}({token_id}){reset}")
-#     else:
-#         token_str = tokenizer.decode([token_id])
-#         colored_tokens.append(f"{green}{token_str}({token_id}){reset}")
-# print("".join(colored_tokens))
-
 gpu_stats = torch.cuda.get_device_properties(0)
 start_gpu_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
 max_memory = round(gpu_stats.total_memory / 1024 / 1024 / 1024, 3)
@@ -131,8 +103,9 @@ print(f"GPU = {gpu_stats.name}. Max memory = {max_memory} GB.")
 print(f"{start_gpu_memory} GB of memory reserved.")
 
 wandb.init(project=product, entity="pink-marker")
-trainer_stats = trainer.train()
-wandb.finish()
+from unsloth import unsloth_train
+# trainer_stats = trainer.train() << Buggy gradient accumulation
+trainer_stats = unsloth_train(trainer)
 
 #@title Show final memory and time stats
 used_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
