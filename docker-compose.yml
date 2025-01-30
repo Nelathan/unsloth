@@ -11,6 +11,7 @@ services:
       - hub:/workspace/hf-cache
       - "D:/ai/unsloth:/workspace/outputs"
       - ./recipes:/workspace/recipes
+      - ./datasets:/workspace/datasets
     deploy:
       resources:
         reservations:
