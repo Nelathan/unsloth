@@ -1,7 +1,9 @@
 services:
   unsloth:
     image: unsloth
-    build: .
+    build:
+      context: .
+      dockerfile: docker/unsloth.dockerfile
     environment:
       - WANDB_API_KEY=${WANDB_API_KEY}
       - HF_TOKEN=${HF_TOKEN}
@@ -22,6 +24,16 @@ services:
     command: ["bash"]
     tty: true
     stdin_open: true
+  # jupyter:
+  #   image: jupyter
+  #   build:
+  #     context: .
+  #     dockerfile: docker/jupyter.dockerfile
+  #   environment:
+  #     - WANDB_API_KEY=${WANDB_API_KEY}
+  #     - HF_TOKEN=${HF_TOKEN}
+  #     - HF_HUB_ENABLE_HF_TRANSFER=1
+  #     - HF_HOME=/workspace/hf-cache
 
 volumes:
   hub:

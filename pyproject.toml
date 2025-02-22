@@ -1,0 +1,12 @@
+[project]
+name = "my-unsloth"
+version = "0.1.0"
+description = "Training my own llm"
+readme = "README.md"
+dependencies = [
+    "unsloth[huggingface]",
+    "torch"
+]
+
+[tool.uv.sources]
+unsloth = { git = "https://github.com/unslothai/unsloth.git" }

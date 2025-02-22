@@ -6,7 +6,7 @@ from transformers import logging, PreTrainedTokenizerFast
 logging.set_verbosity_warning()
 
 model_input = "tiiuae/Falcon3-3B-Base"
-product = "Falcon3-3B-airoboros"
+product = "Falcon3-3B-Duck"
 max_seq_length = 1024*4
 dtype = torch.bfloat16
 load_in_4bit = True
@@ -52,12 +52,21 @@ pass
 
 from datasets import load_dataset
 
-airoboros = load_dataset("jondurbin/airoboros-3.2", split = "train")
-airoboros = standardize_sharegpt(airoboros)
+# airoboros = load_dataset("jondurbin/airoboros-3.2", split = "train")
+# airoboros = standardize_sharegpt(airoboros)
 
-ds_split = airoboros.map(
+sugarquill = load_dataset("allura-org/sugarquill-10k", split = "train")
+system_sugarquill = "You are an author writing popular shortstories."
+sugarquill = sugarquill.map(lambda row:
+    { "conversations": [
+        { "role": "system", "content": system_sugarquill },
+        { "role": "author", "content": row["text"] }]
+    }
+)
+
+ds_split = sugarquill.map(
     formatting_prompts_func,
-    remove_columns=airoboros.column_names,
+    remove_columns=sugarquill.column_names,
     batched = True,
     desc="Formatting Training"
 )
@@ -68,20 +77,21 @@ ds_test = ds_split["test"]
 
 print(f"Dataset split: {len(ds_train)} train, {len(ds_test)} test samples.")
 
-learning_rate = 5e-5
+learning_rate = 50e-5
 
 from unsloth import UnslothTrainer, UnslothTrainingArguments
 from datetime import datetime
+from trl import SFTConfig
+
 timetamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-args = UnslothTrainingArguments(
-    output_dir = "outputs/" + product + f"_{timetamp}",
+args = SFTConfig(
+    output_dir = "outputs/" + product + f"/{timetamp}",
     run_name = f"{timetamp}",
     report_to = "wandb",
     bf16 = True,
 
-    per_device_train_batch_size = 4,
-    auto_find_batch_size = True,
-    gradient_accumulation_steps = 4,
+    per_device_train_batch_size = 2,
+    gradient_accumulation_steps = 8,
     per_device_eval_batch_size = 2,
 
     # packing=True,
@@ -93,17 +103,18 @@ args = UnslothTrainingArguments(
     embedding_learning_rate = learning_rate * 0.1,
     lr_scheduler_type = "polynomial",
     lr_scheduler_kwargs = { "lr_end": learning_rate * 0.70, "power": 1.0 },
-    # warmup_steps = 100,
     max_grad_norm = 1.0,
+    # warmup_steps = 100,
     warmup_ratio = 0.05,
-    # max_steps = 100,
 
-    weight_decay = 0.05,
+    # weight_decay = 0.05,
     eval_strategy="steps",
     do_eval = True,
-    eval_steps = 50,
+    eval_steps = 100,
     logging_steps = 10,
+    save_total_limit=2,
 )
+args =
 
 # Do model patching and add fast LoRA weights
 model = FastLanguageModel.get_peft_model(
@@ -115,7 +126,7 @@ model = FastLanguageModel.get_peft_model(
         "o_proj", "gate_proj", "up_proj", "down_proj",
         "lm_head", "embed_tokens",
     ],
-    # use_gradient_checkpointing="unsloth",
+    use_gradient_checkpointing="unsloth",
 )
 print(">>> LoRA weights added")
 
@@ -124,7 +135,10 @@ trainer = UnslothTrainer(
     tokenizer = tokenizer,
     train_dataset = ds_train,
     eval_dataset = ds_test,
-    args = args
+    args = UnslothTrainingArguments(
+        embedding_learning_rate = learning_rate * 0.1,
+        **args.to_dict()
+    )
 )
 print("Trainer created successfully.")
 
@@ -143,9 +157,13 @@ max_memory = round(gpu_stats.total_memory / 1024 / 1024 / 1024, 3)
 print(f"GPU = {gpu_stats.name}. Max memory = {max_memory} GB.")
 print(f"{start_gpu_memory} GB of memory reserved.")
 
+import gc
+gc.collect()
+torch.cuda.empty_cache()
+
 wandb.init(project=product, entity="pink-marker")
-from unsloth import unsloth_train
-# trainer_stats = trainer.train() << Buggy gradient accumulation
+# from unsloth import unsloth_train
+# trainer_stats = trainer.train()
 trainer_stats = unsloth_train(trainer)
 
 #@title Show final memory and time stats
@@ -160,9 +178,16 @@ print(f"Peak reserved memory for training = {used_memory_for_lora} GB.")
 print(f"Peak reserved memory % of max memory = {used_percentage} %.")
 print(f"Peak reserved memory for training % of max memory = {lora_percentage} %.")
 
+model.save_pretrained(product)
+tokenizer.save_pretrained(product)
+print(f"Model saved to output/{product}.")
+
 FastLanguageModel.for_inference(model) # Enable native 2x faster inference
 
 test_conversations = [
+    {"conversations": [
+        { "role": "system", "content": "You are an author writing popular shortstories." },
+    ]},
     {"conversations": [
         { "role": "system", "content": "You are a game master telling a interactive story in a high fantasy world. The users rely on you for immersive storytelling and challenging scenarios." },
         { "role": "assistant", "content": "The party enters a dark cave. You feel a earie presence." },
@@ -187,7 +212,7 @@ test_conversations = [
     ]},
 ]
 
-test_conversations += airoboros.shuffle(seed=42).select(range(5)).map(lambda row: {
+test_conversations += ds_test.shuffle(seed=42).select(range(5)).map(lambda row: {
     # drop the last message, as it is the prompt
     "conversations": row["conversations"][:-1]
 })
@@ -206,7 +231,7 @@ for example in test_conversations:
         input_ids = inputs["input_ids"],
         attention_mask = inputs["attention_mask"],
         max_new_tokens = 1024,
-        temperature = 0.6,
+        temperature = 0.666,
         top_p = 0.9,
         min_p = 0,
         repetition_penalty = 1.1,
@@ -215,7 +240,3 @@ for example in test_conversations:
     prediction = tokenizer.decode(outputs[0])
     # this is the whole conversation, including the prompt
     print(f"{prediction}\n")
-
-model.save_pretrained(product)
-tokenizer.save_pretrained(product)
-print(f"Model saved to output/{product}.")

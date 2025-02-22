@@ -5,9 +5,9 @@ import wandb
 from transformers import logging, PreTrainedTokenizerFast
 logging.set_verbosity_warning()
 
-model_input = "unsloth/Llama-3.2-3B"
+model_input = "unsloth/Llama-3.2-3B-Instruct-unsloth-bnb-4bit"
 product = "Llama-3.2-3B-Duck"
-max_seq_length = 1024*4
+max_seq_length = 1024*8
 dtype = torch.bfloat16
 load_in_4bit = True
 os.environ["WANDB_WATCH"] = "false"  # Disable gradient logging
@@ -30,19 +30,18 @@ assert isinstance(tokenizer, PreTrainedTokenizerFast), f"Invalid tokenizer type:
 from unsloth.chat_templates import get_chat_template, standardize_sharegpt
 tokenizer = get_chat_template(
     tokenizer,
-    chat_template = 'llama-3'
+    chat_template = 'llama-3.1',
 )
 
 model.resize_token_embeddings(len(tokenizer))
 
-def formatting_prompts_func(examples):
-    convos = examples["conversations"]
-    tokenized = [tokenizer.apply_chat_template(
+def formatting_prompts_func(batch):
+    texts = [tokenizer.apply_chat_template(
         convo,
         tokenize = False,
         add_generation_prompt = False
-        ) for convo in convos]
-    return tokenized
+        ) for convo in batch["conversations"]]
+    return { "text" : texts }
 pass
 
 from datasets import load_dataset, concatenate_datasets
@@ -73,7 +72,7 @@ ds_split = ds_split.map(
     desc="Formatting Training"
 )
 
-ds_split = ds_split.train_test_split(test_size=200, seed=42)
+ds_split = ds_split.train_test_split(test_size=250, seed=42)
 ds_train = ds_split["train"]
 ds_test = ds_split["test"]
 
@@ -86,7 +85,7 @@ for i, row in enumerate(ds_train):
         break
 pass
 
-learning_rate = 10e-5
+learning_rate = 5e-5
 
 from unsloth import UnslothTrainer, UnslothTrainingArguments
 from datetime import datetime
@@ -99,8 +98,8 @@ args = UnslothTrainingArguments(
 
     per_device_train_batch_size = 2,
     gradient_accumulation_steps = 8,
-    per_device_eval_batch_size = 2,
-    logging_steps = 1,
+    per_device_eval_batch_size = 1,
+    logging_steps = 10,
 
     # packing=True,
     num_train_epochs = 1,
@@ -110,7 +109,7 @@ args = UnslothTrainingArguments(
     learning_rate = learning_rate,
     embedding_learning_rate = learning_rate * 0.1,
     lr_scheduler_type = "polynomial",
-    lr_scheduler_kwargs = { "lr_end": learning_rate * 0.60, "power": 1.0 },
+    lr_scheduler_kwargs = { "lr_end": learning_rate * 0.70, "power": 1.0 },
     # warmup_steps = 50,
     # max_grad_norm = 0.5,
     warmup_ratio = 0.05,
@@ -118,7 +117,7 @@ args = UnslothTrainingArguments(
 
     eval_strategy="steps",
     do_eval = True,
-    eval_steps = 25,
+    eval_steps = 100,
 )
 
 # Do model patching and add fast LoRA weights
@@ -131,7 +130,7 @@ model = FastLanguageModel.get_peft_model(
         "o_proj", "gate_proj", "up_proj", "down_proj",
         "lm_head", "embed_tokens",
     ],
-    # use_gradient_checkpointing="unsloth",
+    use_gradient_checkpointing="unsloth",
 )
 print(">>> LoRA weights added")
 
