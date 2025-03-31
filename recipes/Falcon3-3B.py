@@ -7,10 +7,9 @@ logging.set_verbosity_warning()
 
 model_input = "tiiuae/Falcon3-3B-Base"
 product = "Falcon3-3B-Duck"
-max_seq_length = 1024*4
+max_seq_length = 1024*8
 dtype = torch.bfloat16
 load_in_4bit = True
-os.environ["WANDB_WATCH"] = "false"  # Disable gradient logging
 
 from unsloth import FastLanguageModel
 model, tokenizer = FastLanguageModel.from_pretrained(
@@ -50,7 +49,7 @@ def formatting_prompts_func(examples):
     return { "text" : texts }
 pass
 
-from datasets import load_dataset
+from datasets import load_dataset, concatenate_datasets
 
 # airoboros = load_dataset("jondurbin/airoboros-3.2", split = "train")
 # airoboros = standardize_sharegpt(airoboros)
@@ -64,20 +63,22 @@ sugarquill = sugarquill.map(lambda row:
     }
 )
 
-ds_split = sugarquill.map(
+ds_split = concatenate_datasets([sugarquill])
+
+ds_split = ds_split.map(
     formatting_prompts_func,
-    remove_columns=sugarquill.column_names,
+    remove_columns=ds_split.column_names,
     batched = True,
     desc="Formatting Training"
 )
 
-ds_split = ds_split.shuffle(42).train_test_split(test_size=0.01, seed=42)
+ds_split = ds_split.train_test_split(200, seed=42)
 ds_train = ds_split["train"]
 ds_test = ds_split["test"]
 
 print(f"Dataset split: {len(ds_train)} train, {len(ds_test)} test samples.")
 
-learning_rate = 50e-5
+learning_rate = 100e-5
 
 from unsloth import UnslothTrainer, UnslothTrainingArguments
 from datetime import datetime
@@ -90,31 +91,30 @@ args = SFTConfig(
     report_to = "wandb",
     bf16 = True,
 
-    per_device_train_batch_size = 2,
-    gradient_accumulation_steps = 8,
-    per_device_eval_batch_size = 2,
-
     # packing=True,
     num_train_epochs = 1,
     max_seq_length = max_seq_length,
+    per_device_train_batch_size = 2,
+    gradient_accumulation_steps = 4,
+    per_device_eval_batch_size = 1,
 
     optim = "paged_ademamix_8bit",
     learning_rate = learning_rate,
-    embedding_learning_rate = learning_rate * 0.1,
     lr_scheduler_type = "polynomial",
     lr_scheduler_kwargs = { "lr_end": learning_rate * 0.70, "power": 1.0 },
-    max_grad_norm = 1.0,
-    # warmup_steps = 100,
-    warmup_ratio = 0.05,
-
+    max_grad_norm = 2.0,
+    warmup_steps = 100,
+    # warmup_ratio = 0.05,
     # weight_decay = 0.05,
+
+    logging_steps = 10,
     eval_strategy="steps",
     do_eval = True,
     eval_steps = 100,
-    logging_steps = 10,
-    save_total_limit=2,
+    save_strategy = 'steps',
+    # save_steps = 100,
+    save_total_limit=3,
 )
-args =
 
 # Do model patching and add fast LoRA weights
 model = FastLanguageModel.get_peft_model(
@@ -140,7 +140,7 @@ trainer = UnslothTrainer(
         **args.to_dict()
     )
 )
-print("Trainer created successfully.")
+print(">>> Trainer created successfully.")
 
 for i, batch in enumerate(trainer.get_train_dataloader()):
     if i > 0:
@@ -161,10 +161,13 @@ import gc
 gc.collect()
 torch.cuda.empty_cache()
 
-wandb.init(project=product, entity="pink-marker")
+wandb.init(project=product)
 # from unsloth import unsloth_train
-# trainer_stats = trainer.train()
-trainer_stats = unsloth_train(trainer)
+# trainer_stats = unsloth_train(trainer)
+print(">>> START")
+
+trainer_stats = trainer.train()
+
 
 #@title Show final memory and time stats
 used_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)

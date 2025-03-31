@@ -3,9 +3,19 @@ name = "my-unsloth"
 version = "0.1.0"
 description = "Training my own llm"
 readme = "README.md"
+requires-python = ">=3.10,<3.13"
 dependencies = [
     "unsloth[huggingface]",
-    "torch"
+    "torch",
+    "wandb",
+    "datasets",
+    "requests",
+    "tqdm",
+    "backoff",
+    "openai",
+    "google-genai",
+    "dotenv",
+    "groq",
 ]
 
 [tool.uv.sources]

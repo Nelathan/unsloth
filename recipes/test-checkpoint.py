@@ -1,18 +1,50 @@
 import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from peft import PeftModel
+
+# # Base model name
+# base_model_name = "tiiuae/Falcon3-7B-Base"
+# lora_checkpoint = "outputs/Falcon3-7B/20250223_000456/checkpoint-1210"  # Your trained LoRA
+
+# # BitsAndBytes 4-bit configuration to save VRAM
+# bnb_config = BitsAndBytesConfig(
+#     load_in_4bit=True,
+#     bnb_4bit_compute_dtype=torch.bfloat16,
+# )
+
+# # Load base model with quantization
+# model = AutoModelForCausalLM.from_pretrained(
+#     base_model_name,
+#     quantization_config=bnb_config,  # Apply quantization
+#     device_map="auto"  # Ensure it's placed correctly
+# )
+
+# # Load tokenizer
+# tokenizer = AutoTokenizer.from_pretrained(base_model_name)
+
+# # Attach LoRA adapter in **non-trainable** mode (saves VRAM)
+# model = PeftModel.from_pretrained(model, lora_checkpoint, is_trainable=False)
+
+# # Move model to GPU
+# model.to("cuda")
 
 from unsloth import FastLanguageModel
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name = "outputs/Llama-3.2-3B-Duck_20250116_221836/checkpoint-720",
-    max_seq_length = 1024*4,
+    model_name = "outputs/Falcon3-7B/20250223_000456/checkpoint-1210",
+    # max_seq_length = 1024*4,
     dtype = torch.bfloat16,
-    load_in_4bit = False,
+    load_in_4bit = True,
 )
-FastLanguageModel.for_inference(model)
 
-model.save_pretrained_gguf("outputs/Llama-3.2-3B-Duck_20250116_221836/save", tokenizer, quantization_method = "q8_0")
+
+model.save_pretrained_gguf("outputs/Falcon3-7B/sugarquill", tokenizer, quantization_method = "q8_0")
+FastLanguageModel.for_inference(model)
 
 # Diverse test conversations
 test_conversations = [
+    {"conversations": [
+        { "role": "system", "content": "You are an author writing popular shortstories." },
+    ]},
     # Summarization test
     {"conversations": [
         {"role": "system", "content": "You are a bad student in a literature class."},
@@ -68,16 +100,13 @@ for example in test_conversations:
       return_dict = True
     ).to("cuda")
 
-    # Generate response with adjusted parameters
-    outputs = model.generate(
-        input_ids=inputs["input_ids"],
-        attention_mask=inputs["attention_mask"],
-        max_new_tokens=512,
-        temperature=1,
-        top_p=0.9,
-        repetition_penalty=1.1,
-    )
+    with torch.no_grad():
+        output = model.generate(**inputs,
+            max_new_tokens=1024,
+            temperature=0.666,
+            top_p=0.9,
+            repetition_penalty=1.1
+        )
 
-    # Decode and clean prediction
     prediction = tokenizer.decode(outputs[0]).strip()
     print(f"{prediction}\n{'-'*80}")
