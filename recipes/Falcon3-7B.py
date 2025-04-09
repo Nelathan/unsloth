@@ -9,7 +9,7 @@ logging.set_verbosity_warning()
 
 model_input = "tiiuae/Falcon3-7B-Base"
 product = "Falcon3-7B"
-max_seq_length = 1024*2
+max_seq_length = 1024*4
 dtype = None
 load_in_4bit = True
 
@@ -17,7 +17,7 @@ model_config = AutoConfig.from_pretrained(model_input)
 print(f"Model config: {model_config}")
 
 # Load custom synthetic dataset from local file
-sugarquill = load_dataset("parquet", data_files="/workspace/datasets/synth_sugarquill.parquet", split="train")
+sugarquill = load_dataset("parquet", data_files="/workspace/datasets/synthetic-sugar-quill.parquet", split="train")
 
 from unsloth import FastLanguageModel
 model, tokenizer = FastLanguageModel.from_pretrained(
@@ -62,16 +62,18 @@ pass
 
 # sugarquill = load_dataset("allura-org/sugarquill-10k", split = "train")
 
-system_sugarquill = "You are an author writing popular shortstories."
-sugarquill = sugarquill.map(lambda batch:
-    { "conversations": [
-        [
-            { "role": "system", "content": system_sugarquill },
-            { "role": "author", "content": text }
-        ] for text in batch["text"]
-    ]},
-    remove_columns = sugarquill.column_names,
-    batched = True,
+sugarquill = sugarquill.map(
+    lambda batch: {
+        "conversations": [
+            [
+                {"role": "system", "content": profile},
+                {"role": "author", "content": text},
+            ]
+            for profile, text in zip(batch["profile"], batch["text"])
+        ]
+    },
+    remove_columns=sugarquill.column_names,
+    batched=True,
     desc="Formatting Sugarquill"
 )
 
@@ -84,7 +86,7 @@ ds_split = ds_split.map(
     desc="Formatting Training"
 )
 
-ds_split = ds_split.train_test_split(200, seed=42)
+ds_split = ds_split.train_test_split(100, seed=42)
 ds_train = ds_split["train"]
 ds_test = ds_split["test"]
 
@@ -104,10 +106,10 @@ args = SFTConfig(
     bf16 = True,
 
     # packing=True,
-    num_train_epochs = 3,
+    num_train_epochs = 2,
     max_seq_length = max_seq_length,
     per_device_train_batch_size = 1,
-    gradient_accumulation_steps = 8,
+    gradient_accumulation_steps = 4,
     per_device_eval_batch_size = 1,
 
     optim = "paged_ademamix_8bit",
@@ -115,14 +117,14 @@ args = SFTConfig(
     lr_scheduler_type = "polynomial",
     lr_scheduler_kwargs = { "lr_end": learning_rate * 0.10, "power": 1.0 },
     # max_grad_norm = 2.0,
-    warmup_steps = 100,
-    # warmup_ratio = 0.05,
-    # weight_decay = 0.05,
+    # warmup_steps = 100,
+    warmup_ratio = 0.05,
+    weight_decay = 0.01,
 
     logging_steps = 10,
     eval_strategy="steps",
     do_eval = True,
-    eval_steps = 100,
+    eval_steps = 200,
     save_strategy = 'steps',
     # save_steps = 100,
     save_total_limit=3,
@@ -131,12 +133,12 @@ args = SFTConfig(
 # Do model patching and add fast LoRA weights
 model = FastLanguageModel.get_peft_model(
     model,
-    r = 64,
-    lora_alpha = 64,
+    r = 32,
+    lora_alpha = 32,
     target_modules = [
         "q_proj", "k_proj", "v_proj",
         "o_proj", "gate_proj", "up_proj", "down_proj",
-        "lm_head", "embed_tokens",
+        # "lm_head", "embed_tokens",
     ],
     use_gradient_checkpointing="unsloth",
 )
@@ -148,20 +150,20 @@ trainer = UnslothTrainer(
     train_dataset = ds_train.shuffle(42),
     eval_dataset = ds_test,
     args = UnslothTrainingArguments(
-        embedding_learning_rate = learning_rate * 0.1,
+        # embedding_learning_rate = learning_rate * 0.1,
         **args.to_dict()
     )
 )
 print(">>> Trainer created successfully.")
 
-for i, batch in enumerate(trainer.get_train_dataloader()):
-    if i > 0:
-        break
-    print(f"Batch {i+1} labels:")
-    for row in batch["labels"]:
-        labels = row.clone()
-        labels[labels == -100] = tokenizer.pad_token_id
-        print(tokenizer.decode(labels), "\n")
+# for i, batch in enumerate(trainer.get_train_dataloader()):
+#     if i > 0:
+#         break
+#     print(f"Batch {i+1} labels:")
+#     for row in batch["labels"]:
+#         labels = row.clone()
+#         labels[labels == -100] = tokenizer.pad_token_id
+#         print(tokenizer.decode(labels), "\n")
 
 gpu_stats = torch.cuda.get_device_properties(0)
 start_gpu_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
@@ -209,7 +211,7 @@ def print_test_inference(data):
             input_ids = inputs["input_ids"],
             attention_mask = inputs["attention_mask"],
             max_new_tokens = 1024,
-            temperature = 0.666,
+            temperature = 0.7,
             top_p = 0.9,
             min_p = 0,
             repetition_penalty = 1.1,

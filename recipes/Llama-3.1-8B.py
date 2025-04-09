@@ -5,7 +5,7 @@ from transformers import logging, AutoTokenizer
 
 logging.set_verbosity_warning()
 
-model_name = "unsloth/Meta-Llama-3.1-8B-bnb-4bit"
+model_name = "unsloth/Meta-Llama-3.1-8B-Instruct-unsloth-bnb-4bit"
 product = "Llama-3.1-8B-Storywriter"
 max_seq_length = 1024*8
 dtype = torch.bfloat16
@@ -19,16 +19,16 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     dtype = dtype,
     load_in_4bit = load_in_4bit
 )
-tokenizer = AutoTokenizer.from_pretrained("unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit")
+# tokenizer = AutoTokenizer.from_pretrained("unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit")
 # print("tokenizer", tokenizer)
 # print("model", model)
 model.generation_config.eos_token_id = [128001, 128008, 128009]
-print("generation_config", model.generation_config)
+# print("generation_config", model.generation_config)
 print(">>> Model loaded")
 
 # print("tokenizer", tokenizer)
 # print("Added tokens:", tokenizer.get_added_vocab())
-print("Special tokens:", tokenizer.special_tokens_map)
+# print("Special tokens:", tokenizer.special_tokens_map)
 
 llama3_template = \
 """{{- bos_token }}
@@ -48,7 +48,7 @@ tokenizer = get_chat_template(
 )
 
 # only if not equal
-model.resize_token_embeddings(len(tokenizer))
+# model.resize_token_embeddings(len(tokenizer))
 
 def formatting_prompts_func(examples):
     convos = examples["conversations"]

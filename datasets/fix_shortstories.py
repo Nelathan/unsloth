@@ -41,20 +41,24 @@ deepseek_client = OpenAI(
     api_key=os.environ.get("DEEPSEEK_API_KEY")
 )
 
+chatgpt_client = OpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY")
+)
+
 gemini_client = genai.Client(
     api_key=os.environ.get("GEMINI_API_PAID"),
 )
 
-models = gemini_client.models.list()
-for model in models:
-    logger.info(f"Model: {model}")
+# models = chatgpt_client.models.list()
+# for model in models:
+#     logger.info(f"Model: {model}")
 
 groq_client = Groq(
     api_key=os.environ.get("GROQ_API_KEY"),
 )
 
 def setup_database():
-    conn = sqlite3.connect('correction_progress.db')
+    conn = sqlite3.connect('synthetic-sugar-quill.db')
     cursor = conn.cursor()
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS corrections (
@@ -195,6 +199,35 @@ def correct_with_deepseek(text):
         "completion_tokens": usage.completion_tokens if usage else None
     }
 
+def correct_with_chatgpt(text):
+    model = "gpt-4o-2024-11-20"
+
+    completion = chatgpt_client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_editor},
+            {"role": "user", "content": text}
+        ],
+        stream=False,
+        max_completion_tokens=8192,
+        temperature=temperature,
+        top_p=0.9,
+        frequency_penalty=0.0,
+        presence_penalty=0.0,
+    )
+
+    # if content is None, it means the model failed to correct the text
+    if not completion or not completion.choices or not completion.choices[0].message or not completion.choices[0].message.content:
+        logger.warning(f"Failure in API response: {completion}")
+        raise ValueError("Invalid response structure from API")
+
+    usage = completion.usage
+
+    return completion.choices[0].message.content, model, {
+        "prompt_tokens": usage.prompt_tokens if usage else None,
+        "completion_tokens": usage.completion_tokens if usage else None
+    }
+
 def correct_with_gemini(text):
     model = random.choice([
         "gemini-2.5-pro-exp-03-25",
@@ -220,15 +253,15 @@ def correct_with_gemini(text):
             ),
             types.SafetySetting(
                 category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                threshold=types.HarmBlockThreshold.OFF,
             ),
             types.SafetySetting(
                 category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                threshold=types.HarmBlockThreshold.OFF,
             ),
             types.SafetySetting(
                 category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+                threshold=types.HarmBlockThreshold.OFF,
             ),
             types.SafetySetting(
                 category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
@@ -272,7 +305,7 @@ def correct_with_gemini(text):
 def correct_with_groq(text):
     model = random.choice([
         "llama-3.3-70b-specdec",
-        "llama-3.3-70b-versatile",
+        # "llama-3.3-70b-versatile",
         # "llama3-70b-8192",
     ])
     chat_completion = groq_client.chat.completions.create(
@@ -331,10 +364,11 @@ def correct_with_local_api(api_url, text):
 def correct_text(text):
     try:
         return random.choice([
-            # correct_with_deepseek,
-            # correct_with_openrouter,
-            # correct_with_groq,
+            correct_with_deepseek,
+            correct_with_openrouter,
+            correct_with_groq,
             correct_with_gemini,
+            correct_with_chatgpt,
         ])(text)
     except Exception as remote_error:
         logger.error(f"API ERROR: {str(remote_error)}")
@@ -397,7 +431,7 @@ def process_dataset():
 
     conn.close()
 
-def analyze():
+def analyze_local():
     conn = setup_database()
     cursor = conn.cursor()
 
@@ -441,28 +475,90 @@ def analyze():
 
     conn.close()
 
-def clean_author_entries():
+def analyze_gemini():
     conn = setup_database()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, author FROM corrections WHERE author IS NOT NULL and status = 'success'")
 
-    for row in tqdm(cursor.fetchall(), desc="Cleaning author entries"):
+    cursor.execute("SELECT original_id, corrected_text FROM corrections WHERE status = 'success' and author is null ORDER BY id")
+
+    for row in tqdm(cursor.fetchall(), desc="Analyzing authors using gemini"):
         try:
-            id, author_text = row
+            text = row[1]
 
-            # Apply cleanup operations
-            author_text = re.sub(r"^## Author.*?\n\n", "", author_text, flags=re.MULTILINE)  # Remove "## Author..." at the start
-            author_text = re.sub(r"\n{3,}", "\n\n", author_text)  # Replace 4+ newlines with 2
-            author_text = author_text.rstrip()  # Remove trailing newlines and spaces
+            model = random.choice([
+                "gemini-2.5-pro-exp-03-25",
+                # "gemini-2.0-flash-exp",
+                # "gemini-2.0-flash",
+                # "gemma-3-27b-it",
+            ])
+            generate_content_config = types.GenerateContentConfig(
+                temperature=temperature,
+                top_p=0.90,
+                top_k=64,
+                system_instruction=[
+                    types.Part.from_text(
+                        text=system_analyst
+                    ),
+                ],
+                safety_settings=[
+                    types.SafetySetting(
+                        category=types.HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY,
+                        threshold=types.HarmBlockThreshold.OFF,
+                    ),
+                    types.SafetySetting(
+                        category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                        threshold=types.HarmBlockThreshold.OFF,
+                    ),
+                    types.SafetySetting(
+                        category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                        threshold=types.HarmBlockThreshold.OFF,
+                    ),
+                    types.SafetySetting(
+                        category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                        threshold=types.HarmBlockThreshold.OFF,
+                    ),
+                    types.SafetySetting(
+                        category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                        threshold=types.HarmBlockThreshold.OFF,
+                    ),
+                ],
+            )
+
+            response = gemini_client.models.generate_content(
+                model=model,
+                contents=[
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part.from_text(
+                                text=text
+                            ),
+                        ],
+                    ),
+                ],
+                config=generate_content_config,
+            )
+
+            if hasattr(response, "prompt_feedback") and response.prompt_feedback:
+                raise ValueError(f"Blocked because: {response.prompt_feedback}")
+
+            if not response.candidates or len(response.candidates) == 0:
+                raise ValueError("No candidates returned in the response")
+
+            author = response.text if response.text else "ERROR"
+
+            author = re.sub(r"^## Author.*?\n\n", "", author, flags=re.MULTILINE)
+            author = re.sub(r"\n{3,}", "\n\n", author)
+            author = author.rstrip()
 
             cursor.execute(
-                "UPDATE corrections SET author = ? WHERE id = ?",
-                (author_text, id)
+                "UPDATE corrections SET author = ? WHERE original_id = ?",
+                (author, row[0])
             )
             conn.commit()
 
         except Exception as e:
-            logger.error(f"Error cleaning entry {id}: {str(e)}")
+            logger.error(f"Error processing entry {row[0]}: {str(e)}")
 
     conn.close()
 
@@ -474,17 +570,29 @@ def create_final_dataset():
     cursor.execute("SELECT original_id, corrected_text, api_used, author FROM corrections WHERE status = 'success' order by original_id")
     for row in cursor.fetchall():
       try:
-        corrected_data.append({"id": int(row[0]), "text": row[1], "model": row[2]})
+        id = int(row[0])
+        text = row[1]
+        model = row[2]
+        profile = row[3]
+
+        text = re.sub(r"\*(\s\*){2,}", "***", text)
+        text = re.sub(r"\*{3,}", "***", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = text.rstrip()
+
+        profile = re.sub(r"\n{3,}", "\n\n", profile)
+        profile = profile.rstrip()
+
+        corrected_data.append({"id": id, "text": text, "profile": profile, "model": model})
       except Exception as e:
         logger.warning(f"Error adding entry to dataset: {str(e)}")
     conn.close()
 
     corrected_dataset = Dataset.from_list(corrected_data)
     output_dir = Path("datasets")
-    corrected_dataset.to_parquet(output_dir / "synth_sugarquill.parquet")
+    corrected_dataset.to_parquet(output_dir / "synthetic-sugar-quill.parquet")
 
 if __name__ == "__main__":
     process_dataset()
-    # analyze()
-    # clean_author_entries()
-    # create_final_dataset()
+    analyze_gemini()
+    create_final_dataset()
