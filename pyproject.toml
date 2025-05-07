@@ -16,7 +16,6 @@ dependencies = [
     "google-genai",
     "dotenv",
     "groq",
+    "gguf",
+    "protobuf",
 ]
-
-[tool.uv.sources]
-unsloth = { git = "https://github.com/unslothai/unsloth.git" }

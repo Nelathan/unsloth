@@ -1,1 +1,2 @@
 *.parquet binary
+*.ipynb filter=clean-nb

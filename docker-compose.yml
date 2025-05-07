@@ -1,20 +1,20 @@
 services:
   unsloth:
-    image: unsloth
+    image: schlammsuhler/unsloth:2.7.0
+    container_name: unsloth
     build:
       context: .
-      dockerfile: docker/unsloth.dockerfile
+      dockerfile: docker/unsloth-pytorch.dockerfile
     environment:
       - WANDB_API_KEY=${WANDB_API_KEY}
       - HF_TOKEN=${HF_TOKEN}
       - HF_HUB_ENABLE_HF_TRANSFER=1
       - HF_HOME=/workspace/hf-cache
     volumes:
-      - hub:/workspace/hf-cache
-      - "D:/ai/unsloth:/workspace/outputs"
+      - hf-cache:/workspace/hf-cache
+      - "D:/ai/outputs:/workspace/outputs"
       - ./recipes:/workspace/recipes
       - ./datasets:/workspace/datasets
-      - ./main.py:/workspace/main.py
     deploy:
       resources:
         reservations:
@@ -39,8 +39,6 @@ services:
   #     - HF_HOME=/workspace/hf-cache
 
 volumes:
-  hub:
-    driver: local
-    name: "huggingface-cache"
-  outputs:
-    driver: local
+  hf-cache:
+    name: "hf-cache"
+    external: true
