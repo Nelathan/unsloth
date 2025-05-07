@@ -22,7 +22,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    command: ["bash"]
+    #command: ["bash"]
     tty: true
     stdin_open: true
     env_file: ".env"

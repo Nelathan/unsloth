@@ -15,7 +15,6 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     max_seq_length=1024 * 8,
     device_map="auto",
     load_in_4bit=True,
-    float8_kv_cache=True,
 )
 
 print(f"Model loaded. dtype = {model.dtype}.")
@@ -49,11 +48,11 @@ train_dataset = ds_split["train"]
 eval_dataset = ds_split["test"]
 print(f"Dataset split: {len(train_dataset)} train, {len(eval_dataset)} test samples.")
 
-learning_rate = 2e-4
+learning_rate = 1e-4
 args = SFTConfig(
     output_dir="outputs/" + project,
     report_to="wandb",
-    num_train_epochs=2,
+    num_train_epochs=3,
     learning_rate=learning_rate,
     per_device_train_batch_size=1,
     gradient_accumulation_steps=10,
@@ -112,8 +111,8 @@ print(f"Peak reserved memory for training = {used_memory_for_lora} GB.")
 print(f"Peak reserved memory % of max memory = {used_percentage} %.")
 print(f"Peak reserved memory for training % of max memory = {lora_percentage} %.")
 
-model.save_pretrained(f"outputs/{project}")
-tokenizer.save_pretrained(f"outputs/{project}")
+# model.save_pretrained(f"outputs/{project}")
+# tokenizer.save_pretrained(f"outputs/{project}")
 # Online saving
 model.push_to_hub(f"Nelathan/{project}")
 tokenizer.push_to_hub(f"Nelathan/{project}")
@@ -121,9 +120,9 @@ tokenizer.push_to_hub(f"Nelathan/{project}")
 # model.save_pretrained_gguf(
 #     f"outputs/{project}/q4_k_m", tokenizer, quantization_method="q4_k_m"
 # )
-print(f"Model saved to output/{project}.")
+# print(f"Model saved to output/{project}.")
 
-FastModel.for_inference(model)
+FastLanguageModel.for_inference(model)
 
 test_story_profile = """# About me
 
