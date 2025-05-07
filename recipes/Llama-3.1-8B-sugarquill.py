@@ -12,9 +12,10 @@ import wandb
 project = "Llama-3.1-8B-Sugarquill-v9-apollo"
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name="unsloth/Meta-Llama-3.1-8B-unsloth-bnb-4bit",
-    max_seq_length=1024 * 8,
+    max_seq_length=1024 * 10,
     device_map="auto",
     load_in_4bit=True,
+    use_gradient_checkpointing=True,
 )
 
 print(f"Model loaded. dtype = {model.dtype}.")
@@ -54,8 +55,8 @@ args = SFTConfig(
     report_to="wandb",
     num_train_epochs=3,
     learning_rate=learning_rate,
-    per_device_train_batch_size=4,
-    gradient_accumulation_steps=2,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=8,
     per_device_eval_batch_size=1,
     eval_accumulation_steps=4,
     batch_eval_metrics=True,
@@ -69,7 +70,7 @@ args = SFTConfig(
     logging_steps=1,
     eval_strategy="steps",
     do_eval=True,
-    eval_steps=100,
+    eval_steps=200,
     save_total_limit=3,
 )
 
