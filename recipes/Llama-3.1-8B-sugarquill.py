@@ -54,9 +54,9 @@ args = SFTConfig(
     report_to="wandb",
     num_train_epochs=3,
     learning_rate=learning_rate,
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=10,
-    per_device_eval_batch_size=1,
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=4,
+    per_device_eval_batch_size=2,
     eval_accumulation_steps=4,
     batch_eval_metrics=True,
     # optim="ademamix_8bit",
@@ -81,9 +81,7 @@ trainer = UnslothTrainer(
     args=args,
 )
 
-
 trainer = train_on_responses_only(trainer, "# About me\n\n", "Lets write a story.\n\n")
-
 
 gc.collect()
 torch.cuda.empty_cache()
