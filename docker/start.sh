@@ -39,8 +39,15 @@ export_env_vars() {
 echo "Pod Started"
 
 setup_ssh
+
 export_env_vars
 
 echo "Start script(s) finished, pod is ready to use."
+
+echo "Cloning unsloth repository..."
+git clone https://github.com/Nelathan/unsloth.git /workspace/unsloth
+
+echo "Executing train script..."
+python /workspace/unsloth/recipes/Llama-3.1-8B-sugarquill.py
 
 sleep infinity

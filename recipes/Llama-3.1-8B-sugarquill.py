@@ -9,13 +9,10 @@ from unsloth.chat_templates import train_on_responses_only
 import gc
 import wandb
 
-project = "Llama-3.1-8B-Sugarquill-v9-apollo"
+project = "Llama-3.1-8B-Sugarquill-v10-ademamix"
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name="unsloth/Meta-Llama-3.1-8B-unsloth-bnb-4bit",
-    max_seq_length=1024 * 10,
-    device_map="auto",
-    load_in_4bit=True,
-    use_gradient_checkpointing=True,
+    max_seq_length=1024 * 8,
 )
 
 print(f"Model loaded. dtype = {model.dtype}.")
@@ -49,28 +46,27 @@ train_dataset = ds_split["train"]
 eval_dataset = ds_split["test"]
 print(f"Dataset split: {len(train_dataset)} train, {len(eval_dataset)} test samples.")
 
-learning_rate = 1e-4
+learning_rate = 2e-5
+
 args = SFTConfig(
     output_dir="outputs/" + project,
     report_to="wandb",
-    num_train_epochs=3,
+    num_train_epochs=2,
     learning_rate=learning_rate,
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=8,
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=4,
     per_device_eval_batch_size=1,
     eval_accumulation_steps=4,
     batch_eval_metrics=True,
-    # optim="ademamix_8bit",
-    optim="apollo_adamw",
-    optim_target_modules=[r".*.self_attn.*", r".*.mlp.*"],
+    optim="ademamix_8bit",
     lr_scheduler_type="linear",
     max_grad_norm=0.5,
     warmup_steps=100,
-    # weight_decay=0.01,
+    weight_decay=0.01,
     logging_steps=1,
     eval_strategy="steps",
     do_eval=True,
-    eval_steps=200,
+    eval_steps=100,
     save_total_limit=3,
 )
 
