@@ -18,7 +18,7 @@ RUN pip install --upgrade --no-cache-dir uv && uv pip install --system --upgrade
 RUN uv pip install --system --upgrade xformers unsloth[huggingface] bitsandbytes wandb apollo-torch \
   --no-build-isolation \
   --index-strategy=unsafe-best-match \
-  --extra-index-url=https://download.pytorch.org/whl/cu126
+  --extra-index-url=https://download.pytorch.org/whl/cu126 # update
 
 COPY docker/start.sh /
 RUN chmod +x /start.sh

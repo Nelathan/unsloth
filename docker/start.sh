@@ -44,10 +44,13 @@ export_env_vars
 
 echo "Start script(s) finished, pod is ready to use."
 
-echo "Cloning unsloth repository..."
-git clone https://github.com/Nelathan/unsloth.git /workspace/unsloth
+# if folder /workspace/unsloth not exists, clone the repository
+if [ ! -d "/workspace/unsloth" ]; then
+  echo "Cloning unsloth repository..."
+  git clone https://github.com/Nelathan/unsloth.git /workspace/unsloth
+fi
 
-echo "Executing train script..."
-python /workspace/unsloth/recipes/Llama-3.1-8B-sugarquill.py
+# echo "Executing train script..."
+# python /workspace/unsloth/recipes/Llama-3.1-8B-sugarquill.py
 
 sleep infinity

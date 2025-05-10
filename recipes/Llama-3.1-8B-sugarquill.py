@@ -9,10 +9,11 @@ from unsloth.chat_templates import train_on_responses_only
 import gc
 import wandb
 
-project = "Llama-3.1-8B-Sugarquill-v10-ademamix"
+project = "Llama-3.1-8B-Sugarquill-v11"
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name="unsloth/Meta-Llama-3.1-8B-unsloth-bnb-4bit",
+    model_name="Nelathan/Llama-3.1-8B-basemerge",
     max_seq_length=1024 * 8,
+    load_in_8bit=True,
 )
 
 print(f"Model loaded. dtype = {model.dtype}.")
@@ -46,17 +47,17 @@ train_dataset = ds_split["train"]
 eval_dataset = ds_split["test"]
 print(f"Dataset split: {len(train_dataset)} train, {len(eval_dataset)} test samples.")
 
-learning_rate = 2e-5
+learning_rate = 3e-5
 
 args = SFTConfig(
     output_dir="outputs/" + project,
     report_to="wandb",
-    num_train_epochs=2,
+    num_train_epochs=3,
     learning_rate=learning_rate,
     per_device_train_batch_size=2,
-    gradient_accumulation_steps=4,
-    per_device_eval_batch_size=1,
-    eval_accumulation_steps=4,
+    gradient_accumulation_steps=8,
+    per_device_eval_batch_size=2,
+    eval_accumulation_steps=8,
     batch_eval_metrics=True,
     optim="ademamix_8bit",
     lr_scheduler_type="linear",
