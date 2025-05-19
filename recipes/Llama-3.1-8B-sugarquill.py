@@ -1,19 +1,27 @@
+import re
+from numpy import add
 from regex import F, T
 import torch
 import wandb
 from unsloth import FastLanguageModel
 from datasets import load_dataset
-from unsloth import UnslothTrainer
+from trl import SFTTrainer
 from trl import SFTConfig
 from unsloth.chat_templates import train_on_responses_only
 import gc
 import wandb
+import random
+from typing import cast
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-project = "Llama-3.1-8B-Sugarquill-v11"
+project = "Llama-3.1-8B-Sugarquill-v13"
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name="Nelathan/Llama-3.1-8B-basemerge",
     max_seq_length=1024 * 8,
-    load_in_8bit=True,
+    # load_in_4bit=False,
+    # load_in_8bit=True,
 )
 
 print(f"Model loaded. dtype = {model.dtype}.")
@@ -24,16 +32,65 @@ model = FastLanguageModel.get_peft_model(
     lora_alpha=64,
 )
 
+from unsloth.chat_templates import get_chat_template, standardize_sharegpt
+
+freechatml_template = (
+    "{% for message in messages %}"
+    "{{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] + '<|eot_id|>' }}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}"
+    "{{- '<|start_header_id|>' }}"
+    "{% endif %}"
+)
+
+tokenizer = get_chat_template(
+    tokenizer, chat_template=(freechatml_template, tokenizer.eos_token)
+)
+
+model.resize_token_embeddings(len(tokenizer))
+
+user_names = [
+    "Alex",
+    "Jordan",
+    "Taylor",
+    "Morgan",
+    "Casey",
+    "Riley",
+    "Sam",
+    "Jamie",
+    "Avery",
+    "Quinn",
+    "Drew",
+    "Skyler",
+]
+
+user_prompts = [
+    "I'd really enjoy reading a story from you.",
+    "Stories from you always brighten my day.",
+    "If you have a story in mind, I'd love to hear it.",
+    "Whenever you feel inspired, a story would be wonderful.",
+    "Your storytelling always inspires me.",
+    "I appreciate your creativity—share a story when you can.",
+    "A story from you would be a treat.",
+    "I'm in the mood for something imaginative, if you're up for it.",
+    "Your stories always make me think.",
+    "If you're feeling creative, I'd enjoy a story.",
+    "I always look forward to your stories.",
+    "Whenever you're ready, I'd love to read something new.",
+]
+
 sugarquill = load_dataset("Nelathan/synthetic-sugar-quill", split="train")
 sugarquill = sugarquill.map(
     lambda batch: {
-        "text": [
-            tokenizer.bos_token
-            + "# About me\n\n"
-            + profile
-            + "\n\nLets write a story.\n\n"
-            + text
-            + tokenizer.eos_token
+        "conversations": [
+            [
+                {"role": "author", "content": profile},
+                {
+                    "role": random.choice(user_names),
+                    "content": random.choice(user_prompts),
+                },
+                {"role": "author", "content": text},
+            ]
             for profile, text in zip(batch["profile"], batch["text"])
         ],
     },
@@ -42,44 +99,155 @@ sugarquill = sugarquill.map(
     desc="Formatting Sugarquill",
 )
 
-ds_split = sugarquill.train_test_split(0.02, seed=42)
+
+def formatting_prompts_func(batch_examples, tokenizer=tokenizer):
+    convos = batch_examples["conversations"]
+    texts = [
+        tokenizer.apply_chat_template(
+            convo, tokenize=False, add_generation_prompt=False
+        )
+        for convo in convos
+    ]
+    return {"text": texts}
+
+
+ds_split = sugarquill.map(
+    formatting_prompts_func,
+    remove_columns=sugarquill.column_names,
+    batched=True,
+    desc="Formatting Training",
+)
+
+ds_split = ds_split.train_test_split(0.02, seed=42)
 train_dataset = ds_split["train"]
 eval_dataset = ds_split["test"]
 print(f"Dataset split: {len(train_dataset)} train, {len(eval_dataset)} test samples.")
 
-learning_rate = 3e-5
+
+def compute_kino_loss(model, inputs, return_outputs=False):
+    """
+    Custom loss that:
+      - weighs each token's CE by a function of its entropy (more entropy → higher weight)
+      - subtracts a small entropy bonus to encourage high-entropy next-token dists
+    """
+    outputs = model(**inputs)
+    logits = outputs.logits  # (batch, seq_len, vocab_size)
+    labels = inputs["labels"]  # (batch, seq_len)
+
+    # shift so that tokens <n> predict tokens <n+1>
+    shift_logits = logits[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous()
+
+    # 1) per-token cross-entropy (ignore -100)
+    loss_fct = nn.CrossEntropyLoss(ignore_index=-100, reduction="none")
+    flat_loss = loss_fct(
+        shift_logits.view(-1, shift_logits.size(-1)),
+        shift_labels.view(-1),
+    )  # (batch*seq_len,)
+    per_token_loss = flat_loss.view(shift_labels.size())  # (batch, seq_len)
+
+    # 2) per-position entropy: −∑ p·log p
+    probs = F.softmax(shift_logits, dim=-1)
+    entropy = -(probs * (probs + 1e-12).log()).sum(dim=-1)  # (batch, seq_len)
+
+    # 3) build a simple weight: base + α·entropy  (you can swap this for any heuristic)
+    alpha = 0.5
+    weights = 1.0 + alpha * entropy  # (batch, seq_len)
+
+    # 4) combine
+    weighted_ce = (per_token_loss * weights).mean()
+    lambda_ent = 0.1
+    loss = weighted_ce - lambda_ent * entropy.mean()
+
+    return (loss, outputs) if return_outputs else loss
+
+
+learning_rate = 2e-5
 
 args = SFTConfig(
     output_dir="outputs/" + project,
     report_to="wandb",
-    num_train_epochs=3,
+    num_train_epochs=2,
     learning_rate=learning_rate,
-    per_device_train_batch_size=2,
+    per_device_train_batch_size=1,
     gradient_accumulation_steps=8,
-    per_device_eval_batch_size=2,
+    per_device_eval_batch_size=1,
     eval_accumulation_steps=8,
     batch_eval_metrics=True,
-    optim="ademamix_8bit",
+    optim="adamw_8bit",
     lr_scheduler_type="linear",
     max_grad_norm=0.5,
     warmup_steps=100,
     weight_decay=0.01,
-    logging_steps=1,
+    logging_steps=2,
     eval_strategy="steps",
     do_eval=True,
-    eval_steps=100,
+    eval_steps=200,
     save_total_limit=3,
 )
 
-trainer = UnslothTrainer(
+trainer = SFTTrainer(
     model=model,
     tokenizer=tokenizer,
     train_dataset=train_dataset.shuffle(seed=42),
     eval_dataset=eval_dataset,
     args=args,
+    dataset_text_field="text",
+    dataset_num_proc=8,
+    packing=False,
+    # compute_loss_function=compute_kino_loss,
 )
 
-trainer = train_on_responses_only(trainer, "# About me\n\n", "Lets write a story.\n\n")
+
+def mask_from_last_token_dataset(dataset, token_id):
+    """
+    Given an IterableDataset or regular Dataset with a column "input_ids",
+    returns a new dataset with "labels" such that:
+      - all positions <= last(token_id) are masked (-100)
+      - positions after last(token_id) copy input_ids
+    """
+
+    def _mask_fn(examples):
+        input_ids = examples["input_ids"]
+        is_tensor = isinstance(input_ids, torch.Tensor)
+        seqs = input_ids.tolist() if is_tensor else input_ids
+
+        all_labels = []
+        for seq in seqs:
+            n = len(seq)
+            labels = [-100] * n
+            if token_id in seq:
+                last = max(i for i, t in enumerate(seq) if t == token_id)
+                for i in range(last + 1, n):
+                    labels[i] = seq[i]
+            all_labels.append(labels)
+
+        if is_tensor:
+            return {"labels": torch.tensor(all_labels, dtype=torch.int64)}
+        return {"labels": all_labels}
+
+    return dataset.map(_mask_fn, batched=True)
+
+
+token_turn_start = tokenizer("<|start_header_id|>", add_special_tokens=False)[
+    "input_ids"
+][0]
+trainer.train_dataset = mask_from_last_token_dataset(
+    trainer.train_dataset, token_id=token_turn_start
+)
+trainer.eval_dataset = mask_from_last_token_dataset(
+    trainer.eval_dataset, token_id=token_turn_start
+)
+from transformers import DataCollatorForSeq2Seq
+
+trainer.data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer)
+
+# 3) inspect the tokenized inputs and labels
+# 4) check that the labels are masked correctly
+train_loader = trainer.get_train_dataloader()
+batch = next(iter(train_loader))
+print("input_ids:", batch["input_ids"][0])
+print("labels:", batch["labels"][0])
 
 gc.collect()
 torch.cuda.empty_cache()
@@ -92,7 +260,7 @@ print(f"{start_gpu_memory} GB of memory reserved.")
 
 wandb.init(project="Llama-3.1-8B-Sugarquill", entity="pink-marker", save_code=True)
 
-trainer_stats = trainer.train()
+trainer_stats = trainer.train(resume_from_checkpoint=False)
 
 used_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
 used_memory_for_lora = round(used_memory - start_gpu_memory, 3)
@@ -112,11 +280,6 @@ print(f"Peak reserved memory for training % of max memory = {lora_percentage} %.
 # Online saving
 model.push_to_hub(f"Nelathan/{project}")
 tokenizer.push_to_hub(f"Nelathan/{project}")
-
-# model.save_pretrained_gguf(
-#     f"outputs/{project}/q4_k_m", tokenizer, quantization_method="q4_k_m"
-# )
-# print(f"Model saved to output/{project}.")
 
 FastLanguageModel.for_inference(model)
 
@@ -172,23 +335,60 @@ Okay, my private ledger for this new piece...
 This framework feels right. It offers scope for the finesse I value, while ensuring a solid core and meaningful execution. The inherent mystery isn't "whodunnit" but "what is happening to memory, to Elias?" That's the vein I want to tap.
 """
 
+# format as a chat
 tests = [
-    "Lets write a story.\n\n",
-    test_story_profile + "\n\nLets write a story.\n\n",
-    test_story_profile
-    + "\n\n<thinking>"
-    + test_story_notes
-    + "</thinking>\n\n# The Alabaster Echo\n\n",
+    [
+        {
+            "role": random.choice(user_names),
+            "content": random.choice(user_prompts),
+        },
+    ],
+    [
+        {"role": "author", "content": test_story_profile},
+        {
+            "role": random.choice(user_names),
+            "content": random.choice(user_prompts),
+        },
+    ],
+    [
+        {"role": "author", "content": test_story_profile},
+        {
+            "role": random.choice(user_names),
+            "content": "Plan a story, then write it.",
+        },
+    ],
 ]
 
+# transform the test cases to the chat template
+for i in range(len(tests)):
+    tests[i] = tokenizer.apply_chat_template(
+        tests[i], tokenize=False, add_generation_prompt=True
+    )
+
+# for the last test case, add the notes
+tests[-1] = (
+    tests[-1]
+    + "author<|end_header_id|>\n\n<thinking>\n"
+    + test_story_notes
+    + "\n</thinking>\n\n# The Alabaster Echo\n\n"
+)
+
 for text in tests:
+    # tokenize
+    rec = tokenizer(text, return_tensors="pt").to("cuda")
+    # generate
     outputs = model.generate(
-        **tokenizer([text], return_tensors="pt").to("cuda"),
-        max_new_tokens=1024 * 4,
+        **rec,
+        max_new_tokens=1024 * 8,
         temperature=1.0,
         top_p=0.95,
         top_k=64,
         repetition_penalty=1.1,
         do_sample=True,
     )
-    print(tokenizer.batch_decode(outputs))
+    # first decode
+    outputs = tokenizer.batch_decode(outputs)
+    # then unescape
+    outputs = [tokenizer.unescape_text(output) for output in outputs]
+    print(outputs)
+    print("===" * 64)
