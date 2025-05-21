@@ -10,7 +10,7 @@ import gc
 import wandb
 import torch
 
-from utils.flatpack_utils import (
+from utils import (
     DataCollatorForFlatpack,
     FlatpackTrainer,
     group_batches_for_flatpack,
@@ -53,24 +53,33 @@ chatml_template = (
 chatml_eos_token = "<|im_end|>"
 
 tokenizer = get_chat_template(
-    tokenizer, chat_template=(chatml_template, chatml_eos_token, True)
+    tokenizer, chat_template=(chatml_template, chatml_eos_token)
 )
 
 airoboros = standardize_sharegpt(airoboros)
+
 airoboros = airoboros.map(
     lambda x: {
         "text": tokenizer.apply_chat_template(
-            x["conversations"],
-            tokenize=True,
-            add_generation_prompt=False,
-            truncation=True,
-            max_length=max_seq_length,
-            padding=False,
+            x["conversations"], tokenize=False, add_generation_prompt=False
         )
     },
     remove_columns=airoboros.column_names,
     batched=True,
     desc="Formatting airoboros dataset",
+)
+
+airoboros = airoboros.map(
+    lambda x: tokenizer(
+        x["text"],
+        add_special_tokens=True,
+        padding=False,
+        truncation=True,
+        max_length=max_seq_length,
+    ),
+    remove_columns=airoboros.column_names,
+    batched=True,
+    desc="Tokenizing airoboros dataset",
 )
 
 split = airoboros.train_test_split(test_size=0.02)
@@ -79,13 +88,12 @@ eval_dataset = split["test"]
 
 print(f"Dataset split: {len(train_dataset)} train, {len(eval_dataset)} test samples.")
 
-# group the samples into batches
 train_dataset, per_device_train_batch_size = group_batches_for_flatpack(
     train_dataset,
     max_seq_length=max_seq_length,
 )
 
-train_dataset, per_device_eval_batch_size = group_batches_for_flatpack(
+eval_dataset, per_device_eval_batch_size = group_batches_for_flatpack(
     eval_dataset,
     max_seq_length=max_seq_length,
 )
@@ -103,7 +111,7 @@ args = SFTConfig(
     optim="adamw_8bit",
     lr_scheduler_type="constant_with_warmup",
     # max_grad_norm=0.5,
-    warmup_ratio=0.05,
+    warmup_ratio=0.10,
     weight_decay=0.01,
     logging_steps=1,
     eval_strategy="steps",
@@ -117,7 +125,9 @@ trainer = FlatpackTrainer(
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     args=args,
-    data_collator=DataCollatorForFlatpack(),
+    data_collator=DataCollatorForFlatpack(
+        tokenizer=tokenizer, train_roles=["assistant"]
+    ),
 )
 
 wandb.init(project="flatpack", entity="pink-marker", save_code=True)

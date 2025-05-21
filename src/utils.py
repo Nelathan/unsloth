@@ -7,6 +7,7 @@ from typing import List, Dict, Any
 from transformers import DefaultDataCollator, default_data_collator
 from collections import defaultdict
 from datasets import Dataset, concatenate_datasets
+import random
 
 used_start = 0
 total = 0
@@ -68,6 +69,8 @@ def group_batches_for_flatpack(samples, max_seq_length=8192, bin_count=32):
             batch.append(next_sample_id)
             next_sample_id += 1
 
+    # shuffle batches
+    random.shuffle(batches)
     sampleid_to_batchid = {
         sample_id: i for i, batch in enumerate(batches) for sample_id in batch
     }
@@ -89,15 +92,77 @@ class DataCollatorForFlatpack(DefaultDataCollator):
     """
     Packs a batch of features into a single sequence for flat-packing.
     Masks the first label of each example, restarts position_ids per example to prevent cross contamination of attention.
+    Optionally masks loss for chat messages based on roles (only train on specified roles).
     """
 
     return_position_ids: bool = True
     separator_id: int = -100
+    train_roles: List[str] = None  # e.g. ["assistant"]
+    tokenizer = None  # pass tokenizer for role detection
 
-    def __init__(self, *args, return_position_ids=True, separator_id=-100, **kwargs):
+    def __init__(
+        self,
+        *args,
+        return_position_ids=True,
+        separator_id=-100,
+        train_roles=None,
+        tokenizer=None,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.return_position_ids = return_position_ids
         self.separator_id = separator_id
+        self.train_roles = train_roles
+        self.tokenizer = tokenizer
+
+    def mask_chatml_labels(
+        self,
+        ids: List[int],
+        labels: List[int],
+    ):
+        """
+        Masks labels for ChatML-formatted tokens, only training on roles in self.train_roles.
+        Returns a list of labels (masked with -100 where appropriate) starting from the initial labels or otherwise the input_ids.
+        """
+        if self.tokenizer is None or self.train_roles is None:
+            return [-100] + labels[1:]
+
+        start_id = self.tokenizer("<|im_start|>", add_special_tokens=False)[
+            "input_ids"
+        ][0]
+        end_id = self.tokenizer("<|im_end|>", add_special_tokens=False)["input_ids"][0]
+        train_roles_tokenized = [
+            self.tokenizer(role, add_special_tokens=False) for role in self.train_roles
+        ]
+        inside_target_role = False
+
+        for i, token_id in enumerate(ids):
+            if (
+                i == 0
+                and hasattr(self.tokenizer, "bos_token_id")
+                and token_id == self.tokenizer.bos_token_id
+            ):
+                labels[i] = -100
+                continue
+
+            if token_id == start_id:
+                for role in train_roles_tokenized:
+                    role_length = len(role["input_ids"])
+                    if i + role_length >= len(ids):
+                        continue
+                    if ids[i + 1 : i + 1 + role_length] == role["input_ids"]:
+                        inside_target_role = True
+                        labels[i] = -100
+                        break
+
+            elif token_id == end_id:
+                inside_target_role = False
+
+            else:
+                if not inside_target_role:
+                    labels[i] = -100
+
+        return labels
 
     def __call__(
         self, features: List[Dict[str, Any]], return_tensors=None, separator_id=None
@@ -120,12 +185,14 @@ class DataCollatorForFlatpack(DefaultDataCollator):
         for f in real_feats:
             ids = f["input_ids"]
             mask = f["attention_mask"]
-            lbls = f.get("labels", ids)
+            lbls = f.get("labels", ids.copy())
+            lbls[0] = -100
+            if self.train_roles and self.tokenizer:
+                lbls = self.mask_chatml_labels(ids, lbls)
+
             packed["input_ids"].extend(ids)
             packed["attention_mask"].extend(mask)
-            # Mask first label per example
-            packed["labels"].append(-100)
-            packed["labels"].extend(lbls[1:])
+            packed["labels"].extend(lbls)
             if self.return_position_ids:
                 packed["position_ids"].extend(range(len(ids)))
 

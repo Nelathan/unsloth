@@ -1,6 +1,6 @@
 services:
   unsloth:
-    image: schlammsuhler/unsloth:2.7.0-cuda12.6-flash-attn
+    image: schlammsuhler/unsloth:2.6.0-cuda12.6
     container_name: unsloth
     build:
       context: .
@@ -10,11 +10,11 @@ services:
       - HF_TOKEN=${HF_TOKEN}
       - HF_HUB_ENABLE_HF_TRANSFER=1
       - HF_HOME=/workspace/hf-cache
+      - PYTHONPATH=/workspace/src
     volumes:
       - hf-cache:/workspace/hf-cache
       - "D:/ai/outputs:/workspace/outputs"
-      - ./recipes:/workspace/recipes
-      - ./datasets:/workspace/datasets
+      - ./src:/workspace/src
     deploy:
       resources:
         reservations:
