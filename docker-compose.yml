@@ -1,6 +1,6 @@
 services:
   unsloth:
-    image: schlammsuhler/unsloth:2.7.0
+    image: schlammsuhler/unsloth:2.7.0-cuda12.6-flash-attn
     container_name: unsloth
     build:
       context: .
